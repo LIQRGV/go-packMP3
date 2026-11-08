@@ -14,10 +14,10 @@ Huffman-coded data with context modelling and arithmetic coding).
 
 ## How it works
 
-packmp3 works **per file**: every `.mp3` you give it becomes one `.pmp`
-next to it, and every `.pmp` turns back into the original `.mp3`. The file
-type is detected from the content, so the same command does both
-directions. It does not bundle several files into one archive.
+By default packmp3 works **per file**: every `.mp3` you give it becomes one
+`.pmp` next to it, and every `.pmp` turns back into the original `.mp3`. The
+file type is detected from the content, so the same command does both
+directions. With `-b`, many files go into one `.pmpb` bundle (Example 4).
 
 ### Example 1: one file
 
@@ -65,19 +65,7 @@ allow that.
                                                           the originals
 ```
 
-**Want a single file for the whole set?** packmp3 doesn't bundle, but a
-`tar.gz` of the `.pmp` files does it with almost no overhead:
-
-```
- 18 × .pmp ── tar czf suara.tar.gz suara/*.pmp ──► suara.tar.gz (1 file, 218,793 bytes)
-
- back:  tar xzf suara.tar.gz      ──► 18 × suara/*.pmp
-        packmp3 suara/*.pmp       ──► 18 × suara/*.mp3, identical to the originals
-```
-
-Use `tar.gz`, not plain `tar`: plain tar pads every file to 512 bytes,
-which added 17.7 KB (+8%) for these small clips; gzip squeezes that padding
-away (+984 bytes). For the restore you need only `suara.tar.gz`.
+For a single file instead of 18, see Example 4 (bundle).
 
 ### Example 3: one large file, faster (chunked format)
 
@@ -96,15 +84,51 @@ Still one output file. Unpacking needs no `-c`: the chunked format is
 detected automatically. Only this Go version can read chunked files; the
 standard format (no `-c`) is also readable by the C++ packMP3.
 
+### Example 4: many files into one bundle (`.pmpb`)
+
+```
+ INPUT (18 files)                COMMAND                         OUTPUT (1 file)
+ suara/satu.mp3     ┐                                            ┌───────────────────────┐
+ suara/dua.mp3      │                                            │ suara.pmpb            │
+ ...                ├─ packmp3 -b suara.pmpb suara/*.mp3 ──────► │ bundle, 209,344 bytes │
+ suara/alarm.mp3    │                                            │ (84.4% of the MP3s)   │
+ MP3, 247,942 bytes ┘                                            └───────────────────────┘
+
+ BACK: you need only suara.pmpb
+ suara.pmpb  ── packmp3 suara.pmpb ──►  suara/satu.mp3, suara/dua.mp3, ... (18 files,
+                (or -d DIR to choose      original names, each identical to the original)
+                 where files go)
+```
+
+A bundle is smaller than the separate `.pmp` files (217,809 bytes) because
+files of the same MP3 format are joined into one stream: the compressor's
+models learn the voice, encoder habits and header patterns once instead of
+starting from zero for every clip. Inside, the bundle looks like this:
+
+```
+suara.pmpb
+├─ header: 18 names + sizes + group of each file   370 B
+├─ group 0: alarm.mp3 alone (mono VBR)           25,568 B
+└─ group 1: the 17 joint-stereo clips together  183,406 B
+```
+
+Files are grouped automatically by sample rate, channel mode and CRC use.
+A file that can't join a stream (tags inside, damaged start, inconsistent
+header bits) gets its own group, and a file packMP3 can't compress at all
+(e.g. MPEG-2, or not an MP3) is stored as is, so any set of files can be
+bundled and comes back exactly. Getting one file back unpacks its whole
+group. Bundles are a Go-only format.
+
 ### Formats at a glance
 
-| | Standard `.pmp` | Chunked `.pmp` (`-c N`) |
-|---|---|---|
-| Starts with | `MS` + version byte 10 | `GPMP` + version byte 1 |
-| Readable by C++ packMP3 | yes | no |
-| Speed on one large file | one CPU core | all cores |
-| Size | smallest | ~1.3% larger at `-c 1000` |
-| Restores the exact original | yes | yes |
+| | Standard `.pmp` | Chunked `.pmp` (`-c N`) | Bundle `.pmpb` (`-b`) |
+|---|---|---|---|
+| Files per output | 1 → 1 | 1 → 1 | many → 1 |
+| Starts with | `MS` + version byte 10 | `GPMP` + version 1 | `PMPB` + version 1 |
+| Readable by C++ packMP3 | yes | no | no |
+| Speed | one core per file | all cores per file | groups in parallel |
+| Size | baseline | ~1.3% larger at `-c 1000` | smaller for sets of similar files |
+| Restores the exact original | yes | yes | yes, with names |
 
 ## Library
 
@@ -116,6 +140,10 @@ mp3, err := packmp3.Unpack(pmp)      // restore the exact original
 
 // with options (same meaning as packMP3's -p and -ver switches)
 pmp, err = packmp3.PackWithOptions(mp3Bytes, packmp3.Options{Verify: true})
+
+// many files into one bundle and back
+b, err := packmp3.PackBundle([]packmp3.BundleFile{{Name: "satu.mp3", Data: d1}, {Name: "dua.mp3", Data: d2}}, packmp3.Options{})
+files, err := packmp3.UnpackBundle(b, packmp3.Options{})
 ```
 
 `Pack` refuses input it cannot reproduce exactly (CRC mismatches,
@@ -128,7 +156,9 @@ result may then not be bit-identical.
 ```
 go install github.com/LIQRGV/go-packMP3/cmd/packmp3@latest
 
-packmp3 [-p] [-ver] [-o] [-j N] [-c N] file...
+packmp3 [-p] [-ver] [-o] [-j N] [-c N] file...   # one .pmp per file (or back)
+packmp3 -b out.pmpb [-ver] [-o] file...         # all files into one bundle
+packmp3 [-d DIR] [-o] bundle.pmpb               # extract a bundle
 ```
 
 `.mp3` input becomes `.pmp` and vice versa (detected from the content).
