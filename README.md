@@ -34,12 +34,13 @@ result may then not be bit-identical.
 ```
 go install github.com/LIQRGV/go-packMP3/cmd/packmp3@latest
 
-packmp3 [-p] [-ver] [-o] [-j N] file...
+packmp3 [-p] [-ver] [-o] [-j N] [-c N] file...
 ```
 
 `.mp3` input becomes `.pmp` and vice versa (detected from the content).
 Several files are processed in parallel (`-j`, default: number of CPUs);
-results are printed in input order.
+results are printed in input order. `-c N` writes the chunked format
+(see below); unpacking detects it automatically.
 
 ## Speed: Go vs C++
 
@@ -78,6 +79,33 @@ so the CLI spreads them over CPUs. Same machine, median of 5 runs:
 
 The mixed batch can't go below the time of its largest file (2.7 MB,
 ~0.85 s on its own). Output is identical with any `-j`.
+
+### Chunked format: one large file on many cores (`-c`, `Options.ChunkFrames`)
+
+The standard format can't be split, so a single large file uses one core.
+The optional chunked format cuts the MP3 at frame boundaries into runs of
+N frames and stores each run as an independent PMP stream, so chunks are
+packed and unpacked in parallel. The round trip stays bit-exact: a chunk
+that starts mid-stream has frames whose data lies in the previous chunk
+(MP3 bit reservoir), and packMP3's "bad first frames" handling stores those
+losslessly.
+
+The price is compression: every chunk starts with untrained models, and
+its first frames are stored less efficiently. Measured with 20 cores
+(size compared to the standard `.pmp`, speed to single-threaded):
+
+| Chunk size | 2.73 MB file | 2.86 MB file | 1.50 MB file |
+|---:|---|---|---|
+| 500 frames | +2.15%, pack 7.9× / unpack 7.1× | +1.99%, 7.8× / 7.3× | +2.21%, 4.9× / 4.7× |
+| 1000 frames | +1.29%, 4.8× / 4.6× | +1.13%, 4.3× / 4.5× | +1.37%, 3.3× / 3.3× |
+| 2000 frames | +0.73%, 3.2× / 2.9× | +0.68%, 3.4× / 3.5× | +0.57%, 1.6× / 1.6× |
+
+For scale: packMP3 saves about 12–14% on these files, so +1.3% gives up
+roughly a tenth of the saving. Files shorter than one chunk are not
+split. (1000 frames ≈ 26 seconds of audio.)
+
+Caveats: the chunked format (magic `GPMP`) can only be read by this Go
+package, not by the C++ packMP3; keep the default for compatibility.
 
 To reproduce the Go side: `PACKMP3_BENCHFILE=file.mp3 go test -bench Pack`.
 

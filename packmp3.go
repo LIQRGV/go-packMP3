@@ -26,6 +26,17 @@ type Options struct {
 	// Verify decompresses the result again and checks that it reproduces
 	// the input exactly (packMP3's -ver switch).
 	Verify bool
+
+	// ChunkFrames > 0 selects the chunked format: the MP3 is split into runs
+	// of this many frames (at least 16) that are compressed in parallel.
+	// Much faster on multi-core machines, but slightly larger, and only
+	// this Go package can read it (not the C++ packMP3). 1000 is a good
+	// value: about 1.3% larger than the standard format. 0 = standard.
+	ChunkFrames int
+
+	// Workers limits the goroutines used for the chunked format
+	// (<= 0: number of CPUs).
+	Workers int
 }
 
 var errTruncated = errors.New("unexpected end of data")
@@ -33,9 +44,10 @@ var errTruncated = errors.New("unexpected end of data")
 // ErrNotPMP is returned by Unpack for data without the PMP signature.
 var ErrNotPMP = errors.New("packmp3: not a PMP file")
 
-// IsPMP reports whether data starts with the PMP signature.
+// IsPMP reports whether data starts with the PMP signature (standard or
+// chunked format).
 func IsPMP(data []byte) bool {
-	return len(data) >= 2 && data[0] == pmpMagic[0] && data[1] == pmpMagic[1]
+	return IsChunked(data) || len(data) >= 2 && data[0] == pmpMagic[0] && data[1] == pmpMagic[1]
 }
 
 // Pack compresses an MP3 file. It fails on any input it cannot reproduce
@@ -44,7 +56,8 @@ func Pack(mp3 []byte) ([]byte, error) {
 	return PackWithOptions(mp3, Options{})
 }
 
-// Unpack decompresses a PMP file back to the original MP3.
+// Unpack decompresses a PMP file (standard or chunked) back to the
+// original MP3.
 func Unpack(pmp []byte) ([]byte, error) {
 	return UnpackWithOptions(pmp, Options{})
 }
@@ -52,6 +65,13 @@ func Unpack(pmp []byte) ([]byte, error) {
 // PackWithOptions is Pack with options.
 func PackWithOptions(mp3 []byte, opt Options) (out []byte, err error) {
 	defer recoverCorrupt(&err)
+	if opt.ChunkFrames > 0 {
+		out, err = packChunked(mp3, opt)
+		if err == nil && opt.Verify {
+			err = verifyEqual(out, mp3)
+		}
+		return out, err
+	}
 	c := newCodec()
 	check := func() error {
 		if c.warning != nil && !opt.ProceedOnWarnings {
@@ -74,15 +94,22 @@ func PackWithOptions(mp3 []byte, opt Options) (out []byte, err error) {
 		return nil, err
 	}
 	if opt.Verify {
-		back, err := UnpackWithOptions(out, Options{})
-		if err != nil {
-			return nil, fmt.Errorf("packmp3: verification failed: %w", err)
-		}
-		if !bytes.Equal(back, mp3) {
-			return nil, errors.New("packmp3: verification failed: output differs from input")
+		if err := verifyEqual(out, mp3); err != nil {
+			return nil, err
 		}
 	}
 	return out, nil
+}
+
+func verifyEqual(pmp, mp3 []byte) error {
+	back, err := Unpack(pmp)
+	if err != nil {
+		return fmt.Errorf("packmp3: verification failed: %w", err)
+	}
+	if !bytes.Equal(back, mp3) {
+		return errors.New("packmp3: verification failed: output differs from input")
+	}
+	return nil
 }
 
 // UnpackWithOptions is Unpack with options.
@@ -90,6 +117,9 @@ func UnpackWithOptions(pmp []byte, opt Options) (out []byte, err error) {
 	defer recoverCorrupt(&err)
 	if !IsPMP(pmp) {
 		return nil, ErrNotPMP
+	}
+	if IsChunked(pmp) {
+		return unpackChunked(pmp, opt.Workers)
 	}
 	c := newCodec()
 	if err := c.uncompressPMP(pmp); err != nil {

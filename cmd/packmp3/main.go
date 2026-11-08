@@ -1,6 +1,6 @@
 // Command packmp3 losslessly compresses MP3 files to PMP and back.
 //
-//	packmp3 [-p] [-ver] [-o] [-j N] file...
+//	packmp3 [-p] [-ver] [-o] [-j N] [-c N] file...
 //
 // .mp3 files are compressed to .pmp, .pmp files are decompressed to .mp3
 // (the type is detected from the content, not the extension).
@@ -23,8 +23,9 @@ func main() {
 	verify := flag.Bool("ver", false, "verify output after processing")
 	overwrite := flag.Bool("o", false, "overwrite existing files")
 	jobs := flag.Int("j", runtime.NumCPU(), "number of files to process in parallel")
+	chunk := flag.Int("c", 0, "chunked format: compress runs of N frames in parallel\n(faster, ~1% larger at N=1000, Go-only format); 0 = standard packMP3 format")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: packmp3 [-p] [-ver] [-o] [-j N] file...\n")
+		fmt.Fprintf(os.Stderr, "usage: packmp3 [-p] [-ver] [-o] [-j N] [-c N] file...\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -32,7 +33,7 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	opt := packmp3.Options{ProceedOnWarnings: *proceed, Verify: *verify}
+	opt := packmp3.Options{ProceedOnWarnings: *proceed, Verify: *verify, ChunkFrames: *chunk}
 	files := flag.Args()
 
 	// Each file is independent (the codec itself is sequential), so files

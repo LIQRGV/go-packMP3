@@ -59,6 +59,18 @@ func TestCompat(t *testing.T) {
 			if !bytes.Equal(back, mp3) {
 				t.Fatalf("round trip differs (%d vs %d bytes)", len(back), len(mp3))
 			}
+			if opt.ProceedOnWarnings {
+				return
+			}
+			// chunked format: small chunks to force splitting
+			opt.ChunkFrames = 16
+			cpmp, err := PackWithOptions(mp3, opt)
+			if err != nil {
+				t.Fatalf("chunked Pack: %v", err)
+			}
+			if back, err = Unpack(cpmp); err != nil || !bytes.Equal(back, mp3) {
+				t.Fatalf("chunked round trip failed: %v", err)
+			}
 		})
 	}
 }

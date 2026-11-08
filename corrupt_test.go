@@ -27,8 +27,12 @@ func TestCorruptInput(t *testing.T) {
 		if err != nil {
 			continue
 		}
+		cpmp, err := PackWithOptions(mp3, Options{ChunkFrames: 16})
+		if err != nil {
+			t.Fatal(err)
+		}
 		for i := 0; i < 40; i++ {
-			for _, src := range [][]byte{mp3, pmp} {
+			for _, src := range [][]byte{mp3, pmp, cpmp} {
 				d := append([]byte(nil), src...)
 				switch rnd.Intn(3) {
 				case 0: // flip a few bytes
