@@ -34,10 +34,12 @@ result may then not be bit-identical.
 ```
 go install github.com/LIQRGV/go-packMP3/cmd/packmp3@latest
 
-packmp3 [-p] [-ver] [-o] file...
+packmp3 [-p] [-ver] [-o] [-j N] file...
 ```
 
 `.mp3` input becomes `.pmp` and vice versa (detected from the content).
+Several files are processed in parallel (`-j`, default: number of CPUs);
+results are printed in input order.
 
 ## Speed: Go vs C++
 
@@ -62,6 +64,20 @@ Setup: Intel Core i7-13650HX, Linux (WSL2), Go 1.25.4, C++ packMP3 v1.0g
 built with g++ 13.3 `-O2`. WSL timings are somewhat noisy; treat
 differences under ~10% as noise. Most of the Go time is spent in the
 arithmetic coder and the context models, as in the original.
+
+### Parallel batches (`-j`)
+
+Coding one file is inherently sequential (a single arithmetic-coded stream
+whose models learn from every previous symbol), but files are independent,
+so the CLI spreads them over CPUs. Same machine, median of 5 runs:
+
+| Batch | `-j 1` pack / unpack | `-j 20` pack / unpack | Speedup |
+|---|---:|---:|---:|
+| 18 short clips, 248 KB | 0.087 s / 0.099 s | 0.024 s / 0.021 s | 3.6× / 4.6× |
+| 10 mixed files, 7.3 MB | 2.26 s / 2.23 s | 0.85 s / 0.90 s | 2.7× / 2.5× |
+
+The mixed batch can't go below the time of its largest file (2.7 MB,
+~0.85 s on its own). Output is identical with any `-j`.
 
 To reproduce the Go side: `PACKMP3_BENCHFILE=file.mp3 go test -bench Pack`.
 
