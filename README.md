@@ -12,6 +12,100 @@ Matthias Stirner: lossless compression for MP3 (MPEG-1 Layer III) files.
 Typical savings are 10–20% on top of the MP3 (packMP3 re-encodes the
 Huffman-coded data with context modelling and arithmetic coding).
 
+## How it works
+
+packmp3 works **per file**: every `.mp3` you give it becomes one `.pmp`
+next to it, and every `.pmp` turns back into the original `.mp3`. The file
+type is detected from the content, so the same command does both
+directions. It does not bundle several files into one archive.
+
+### Example 1: one file
+
+```
+ INPUT (1 file)              COMMAND                      OUTPUT (1 file)
+ ┌───────────────────┐                                    ┌───────────────────┐
+ │ satu.mp3          │  ──  packmp3 satu.mp3  ──────────► │ satu.pmp          │
+ │ MP3, 10,866 bytes │                                    │ PMP, 9,496 bytes  │
+ └───────────────────┘                                    │ (87.4% of input)  │
+                                                          └───────────────────┘
+```
+
+`satu.mp3` is left untouched; you can delete it once you keep `satu.pmp`.
+
+**Back to the original.** You need only `satu.pmp`:
+
+```
+ INPUT (1 file)              COMMAND                      OUTPUT (1 file)
+ ┌───────────────────┐                                    ┌───────────────────┐
+ │ satu.pmp          │  ──  packmp3 satu.pmp  ──────────► │ satu.mp3          │
+ │ PMP, 9,496 bytes  │                                    │ MP3, 10,866 bytes │
+ └───────────────────┘                                    │ identical to the  │
+                                                          │ original, bit for │
+                                                          │ bit               │
+                                                          └───────────────────┘
+```
+
+If `satu.mp3` still exists, packmp3 refuses to overwrite it; add `-o` to
+allow that.
+
+### Example 2: many files (e.g. 18 voice clips)
+
+```
+ INPUT (18 files)            COMMAND                      OUTPUT (18 files)
+ suara/satu.mp3     ┐                                     ┌ suara/satu.pmp
+ suara/dua.mp3      │                                     │ suara/dua.pmp
+ ...                ├─ packmp3 suara/*.mp3 ─────────────► ┤ ...
+ suara/seratus.mp3  │  (all CPU cores, -j)                │ suara/seratus.pmp
+ MP3, 247,942 bytes ┘                                     └ PMP, 217,809 bytes
+                                                            total (87.8%)
+
+ INPUT (18 files)            COMMAND                      OUTPUT (18 files)
+ suara/*.pmp        ─────── packmp3 suara/*.pmp ────────► suara/*.mp3
+                                                          all 18 identical to
+                                                          the originals
+```
+
+**Want a single file for the whole set?** packmp3 doesn't bundle, but a
+`tar.gz` of the `.pmp` files does it with almost no overhead:
+
+```
+ 18 × .pmp ── tar czf suara.tar.gz suara/*.pmp ──► suara.tar.gz (1 file, 218,793 bytes)
+
+ back:  tar xzf suara.tar.gz      ──► 18 × suara/*.pmp
+        packmp3 suara/*.pmp       ──► 18 × suara/*.mp3, identical to the originals
+```
+
+Use `tar.gz`, not plain `tar`: plain tar pads every file to 512 bytes,
+which added 17.7 KB (+8%) for these small clips; gzip squeezes that padding
+away (+984 bytes). For the restore you need only `suara.tar.gz`.
+
+### Example 3: one large file, faster (chunked format)
+
+```
+ INPUT (1 file)              COMMAND                      OUTPUT (1 file)
+ ┌───────────────────┐                                    ┌─────────────────────┐
+ │ big.mp3           │  ── packmp3 -c 1000 big.mp3 ─────► │ big.pmp             │
+ │ MP3, 2,734,622 B  │     (cut into runs of 1000         │ chunked PMP ("GPMP")│
+ └───────────────────┘      frames, packed in parallel)   │ 2,394,454 B (87.6%) │
+                                                          └─────────────────────┘
+
+ big.pmp  ──  packmp3 big.pmp  ──►  big.mp3 (identical to the original)
+```
+
+Still one output file. Unpacking needs no `-c`: the chunked format is
+detected automatically. Only this Go version can read chunked files; the
+standard format (no `-c`) is also readable by the C++ packMP3.
+
+### Formats at a glance
+
+| | Standard `.pmp` | Chunked `.pmp` (`-c N`) |
+|---|---|---|
+| Starts with | `MS` + version byte 10 | `GPMP` + version byte 1 |
+| Readable by C++ packMP3 | yes | no |
+| Speed on one large file | one CPU core | all cores |
+| Size | smallest | ~1.3% larger at `-c 1000` |
+| Restores the exact original | yes | yes |
+
 ## Library
 
 ```go
